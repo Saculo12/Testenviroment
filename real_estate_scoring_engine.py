@@ -1,21 +1,124 @@
-import pandas as pd
-import numpy_financial as npf  # Make sure to run 'pip install numpy-financial'
-from fredapi import Fred
 import os
+import time
+from pathlib import Path
+
+import pandas as pd
+import numpy_financial as npf  # pip install numpy-financial
+import requests
+from fredapi import Fred
+
+# Optional: load FRED_API_KEY from a local .env if python-dotenv is installed.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
-def get_live_treasury_rate(api_key=None):
-    """Fetches the live 10-Year Treasury rate from FRED, or defaults to 4.5%"""
+CACHE_DIR = Path(__file__).parent / ".cache"
+CACHE_DIR.mkdir(exist_ok=True)
+TREASURY_TTL_SEC = 24 * 60 * 60       # refresh DGS10 once a day
+ZORI_TTL_SEC = 7 * 24 * 60 * 60       # refresh ZORI weekly
+
+ZORI_METRO_CSV_URL = os.environ.get(
+    "ZORI_METRO_CSV_URL",
+    "https://files.zillowstatic.com/research/public_csvs/zori/Metro_zori_uc_sfrcondomfr_sm_month.csv",
+)
+
+# Our internal market tag -> Zillow MSA RegionName (exact string in the CSV)
+MARKET_TO_ZORI_METRO = {
+    "PHOENIX": "Phoenix, AZ",
+    "TEMPE":   "Phoenix, AZ",
+    "CHICAGO": "Chicago, IL",
+    "DALLAS":  "Dallas, TX",
+}
+
+
+def _is_fresh(path, ttl_sec):
+    return path.exists() and (time.time() - path.stat().st_mtime) < ttl_sec
+
+
+def get_live_treasury_rate():
+    """Live 10-Year Treasury (FRED DGS10) with daily disk cache.
+
+    Reads the key from the FRED_API_KEY env var. Falls back to 4.5% if the
+    key is unset or the fetch fails.
+    """
+    cache = CACHE_DIR / "dgs10.txt"
+    if _is_fresh(cache, TREASURY_TTL_SEC):
+        try:
+            return float(cache.read_text().strip())
+        except Exception:
+            pass
+
+    api_key = os.environ.get("FRED_API_KEY")
     if not api_key:
-        return 0.045  # Default 4.5% if no API key is provided
+        print("ℹ️  FRED_API_KEY not set — defaulting to 4.50% 10-Yr Treasury.")
+        return 0.045
     try:
         fred = Fred(api_key=api_key)
-        data = fred.get_series('DGS10')
-        latest_rate = data.iloc[-1] / 100  # Convert e.g., 4.5 to 0.045
-        return latest_rate
+        series = fred.get_series("DGS10").dropna()
+        rate = float(series.iloc[-1]) / 100
+        cache.write_text(str(rate))
+        return rate
     except Exception as e:
-        print(f"⚠️ FRED API failed to fetch live treasury rate: {e}. Falling back to 4.5%")
+        print(f"⚠️  FRED fetch failed: {e}. Falling back to 4.50%.")
         return 0.045
+
+
+_zori_df_cache = None
+
+
+def _load_zori_metro_df():
+    """Downloads (or reads cached) Zillow ZORI Metro CSV and memoizes it."""
+    global _zori_df_cache
+    if _zori_df_cache is not None:
+        return _zori_df_cache
+
+    cache = CACHE_DIR / "zori_metro.csv"
+    if not _is_fresh(cache, ZORI_TTL_SEC):
+        try:
+            r = requests.get(ZORI_METRO_CSV_URL, timeout=30)
+            r.raise_for_status()
+            cache.write_bytes(r.content)
+        except Exception as e:
+            print(f"⚠️  ZORI download failed: {e}.")
+            if not cache.exists():
+                return None
+    try:
+        _zori_df_cache = pd.read_csv(cache)
+        return _zori_df_cache
+    except Exception as e:
+        print(f"⚠️  Failed to parse ZORI CSV: {e}.")
+        return None
+
+
+def get_zori_rent_growth(market_tag):
+    """Trailing-12-month YoY ZORI rent growth for the metro tied to market_tag.
+
+    Returns None when the metro isn't mapped, the CSV can't be loaded, or
+    the series is too short — the caller should fall back to MARKET_LIBRARY.
+    """
+    metro = MARKET_TO_ZORI_METRO.get(market_tag.upper())
+    if not metro:
+        return None
+    df = _load_zori_metro_df()
+    if df is None:
+        return None
+    row = df[df["RegionName"] == metro]
+    if row.empty:
+        return None
+
+    date_cols = [c for c in df.columns if len(c) == 10 and c[4] == "-" and c[7] == "-"]
+    if len(date_cols) < 13:
+        return None
+    series = row.iloc[0][date_cols].astype(float).dropna()
+    if len(series) < 13:
+        return None
+    latest, year_ago = float(series.iloc[-1]), float(series.iloc[-13])
+    if year_ago <= 0:
+        return None
+    return latest / year_ago - 1.0
 
 
 MARKET_LIBRARY = {
@@ -75,13 +178,20 @@ class Property:
         """Forces a 1.25 DSCR and runs matrix scenarios categorized by LTV brackets and Agency spreads"""
         base_rate = get_live_treasury_rate()
         market_data = MARKET_LIBRARY.get(self.market_tag, MARKET_LIBRARY["DEFAULT"])
-        rent_growth = market_data.get("rent_growth", 0.03)
+
+        live_rent_growth = get_zori_rent_growth(self.market_tag)
+        if live_rent_growth is not None:
+            rent_growth = live_rent_growth
+            rent_growth_source = f"ZORI live ({self.market_tag})"
+        else:
+            rent_growth = market_data.get("rent_growth", 0.03)
+            rent_growth_source = f"library default ({self.market_tag})"
 
         print(f"\n======================================================================================================")
         print(f"📊 INSTITUTIONAL BUY SCORE & STRIKE ENGINE: {self.name}")
         print(f"======================================================================================================")
         print(f"Underwriting Parameters: Forced 1.25 DSCR Target Floor | Base Operational NOI: ${explicit_noi:,.2f}")
-        print(f"Macro Baseline: 10-Yr Treasury: {base_rate*100:.2f}% | Amortization Schedule: {self.amort_years} Years")
+        print(f"Macro Baseline: 10-Yr Treasury: {base_rate*100:.2f}% | Rent Growth: {rent_growth*100:.2f}% ({rent_growth_source}) | Amortization: {self.amort_years} Years")
         if pricing_guidance and pricing_guidance > 5000:
             print(f"Broker/OM Asking Price: ${pricing_guidance:,.2f}")
         print("-" * 102)

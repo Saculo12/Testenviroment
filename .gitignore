@@ -18,5 +18,9 @@ env/
 Thumbs.db
 
 # Local data / secrets
-*.env
-.env.*
+.env
+.env.local
+.env.*.local
+
+# Live-data cache (FRED rates, ZORI CSV, etc.)
+.cache/

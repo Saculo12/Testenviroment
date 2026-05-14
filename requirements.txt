@@ -1,0 +1,5 @@
+pandas>=2.0
+numpy-financial>=1.0
+fredapi>=0.5
+requests>=2.31
+python-dotenv>=1.0
