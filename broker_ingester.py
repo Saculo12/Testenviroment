@@ -23,6 +23,7 @@ import imaplib
 import json
 import os
 import re
+import socket
 import time
 from email.header import decode_header
 from email.message import Message
@@ -105,6 +106,13 @@ def _require_env(name):
             f"In GitHub Actions, set it under Settings → Secrets and variables → Actions. "
             f"Locally, set it in your .env file (see .env.example)."
         )
+    # Catch the common copy-paste mistake of pasting the whole "KEY=value" line
+    # as the secret value (would produce a confusing DNS / auth error otherwise).
+    if val.startswith(f"{name}="):
+        raise SystemExit(
+            f"❌ Env var {name!r} value starts with {name!r} — looks like you pasted the "
+            f"whole 'KEY=VALUE' line into the secret. Paste only the value (e.g. 'imap.gmail.com')."
+        )
     return val
 
 
@@ -113,7 +121,14 @@ def connect_imap():
     port = int(os.environ.get("IMAP_PORT", 993))
     user = _require_env("IMAP_USER")
     password = _require_env("IMAP_PASSWORD")
-    conn = imaplib.IMAP4_SSL(host, port)
+    try:
+        conn = imaplib.IMAP4_SSL(host, port)
+    except socket.gaierror as e:
+        raise SystemExit(
+            f"❌ DNS resolution failed for IMAP_HOST={host!r} (port {port}): {e}. "
+            f"Check the secret value — it should be a bare hostname like 'imap.gmail.com', "
+            f"with no scheme, port, whitespace, or quotes."
+        )
     conn.login(user, password)
     return conn
 
