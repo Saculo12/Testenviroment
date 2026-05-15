@@ -24,3 +24,8 @@ Thumbs.db
 
 # Live-data cache (FRED rates, ZORI CSV, etc.)
 .cache/
+
+# Broker email ingester artifacts (downloaded OMs + extracted deals)
+inbox/
+ingested_deals.csv
+ingest.log
