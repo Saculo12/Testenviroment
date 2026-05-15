@@ -4,3 +4,4 @@ fredapi>=0.5
 requests>=2.31
 python-dotenv>=1.0
 beautifulsoup4>=4.12
+anthropic>=0.40

@@ -31,6 +31,12 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 try:
+    import anthropic
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:
+    _ANTHROPIC_AVAILABLE = False
+
+try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -251,7 +257,7 @@ def _normalize_money(value, suffix):
     return n
 
 
-def extract_deal_fields(subject, body):
+def extract_deal_fields_regex(subject, body):
     haystack = f"{subject}\n{body}"
 
     fields = {
@@ -262,6 +268,7 @@ def extract_deal_fields(subject, body):
         "Cap Rate": "",
         "City": "",
         "State": "",
+        "County": "",
         "Listing URL": "",
     }
 
@@ -279,6 +286,178 @@ def extract_deal_fields(subject, body):
         fields["Listing URL"] = m.group(0)
 
     return fields
+
+
+# --------------------------------------------------------------------------
+# LLM-based extraction (Claude Haiku 4.5)
+# --------------------------------------------------------------------------
+
+LLM_MODEL = "claude-haiku-4-5"
+LLM_MAX_BODY_CHARS = 12000  # truncate runaway threads; real OMs come as attachments
+
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "Property Name": {"type": ["string", "null"]},
+        "# Units":       {"type": ["integer", "null"]},
+        "NOI":           {"type": ["number", "null"]},
+        "Price":         {"type": ["number", "null"]},
+        "Cap Rate":      {"type": ["number", "null"]},
+        "City":          {"type": ["string", "null"]},
+        "State":         {"type": ["string", "null"]},
+        "County":        {"type": ["string", "null"]},
+        "Listing URL":   {"type": ["string", "null"]},
+    },
+    "required": [
+        "Property Name", "# Units", "NOI", "Price", "Cap Rate",
+        "City", "State", "County", "Listing URL",
+    ],
+    "additionalProperties": False,
+}
+
+EXTRACTION_SYSTEM_PROMPT = """\
+You extract structured deal data from commercial real-estate broker emails focused
+on US multifamily (apartment) investments. Given the Subject line and Body, return
+a single JSON object matching the provided schema.
+
+# Field guide
+
+- "Property Name": apartment community name. Strip marketing prefixes like
+  "New Listing:", "For Sale:", "Now Available:", "Just Listed:", "Featured
+  Offering:", "Offering Memorandum:", "Exclusive Listing:". E.g. "The Vintage
+  at Tempe Apartments".
+- "# Units": integer, total unit count. Phrases: "184 units", "184-unit",
+  "184 apartment homes", "Units: 184".
+- "NOI": annual Net Operating Income in USD as a NUMBER (no $, no commas).
+  Watch shortforms: "$1.2M NOI" -> 1200000. "T-12 NOI", "Trailing NOI",
+  "Year 1 NOI", "Stabilized NOI" all count. DISTINGUISH from gross income
+  or revenue.
+- "Price": asking / list / guidance price in USD as a number. Phrases:
+  "Asking $52,500,000", "Price: $52.5M", "Offered at $52MM". Convert M/MM
+  /million -> x1,000,000; K/thousand -> x1,000.
+- "Cap Rate": stated cap rate as a percentage NUMBER (not decimal). E.g.
+  "5.5% cap" -> 5.5. "Going-in cap", "stabilized cap", "in-place cap" all
+  count.
+- "City": primary city. E.g. "Phoenix", "Tempe", "Long Beach".
+- "State": uppercase two-letter US state code. E.g. "AZ", "CA".
+- "County": county name WITHOUT the word "County". E.g. "Maricopa", "Los
+  Angeles", "Riverside". Often only in address blocks or property
+  highlights -- may be absent.
+- "Listing URL": single most-direct listing detail URL. Prefer CREXi,
+  LoopNet, Ten-X, or broker-hosted offering pages. SKIP unsubscribe links,
+  email-tracking redirects, and broker home pages.
+
+# Rules
+
+1. Use null when a value is missing or ambiguous -- DO NOT guess.
+2. JSON numbers are numeric (no $, commas, or suffixes).
+3. If the email lists a PORTFOLIO of multiple properties, extract only the
+   HEADLINE property -- do not aggregate units, NOIs, or prices across the
+   portfolio.
+4. If the email is a market report, research piece, or newsletter digest
+   (not a specific deal), return null for every field.
+5. Trust the body more than the subject. Subjects are marketing-heavy.
+
+# Examples
+
+## Example 1
+Subject: NEW LISTING: The Vintage at Tempe | 184 Units | Tempe, AZ
+Body: We are pleased to present The Vintage at Tempe Apartments, a 184-unit
+garden-style community in Tempe, Arizona (Maricopa County). Asking price:
+$52,500,000. Year 1 NOI: $2,415,000. Going-in cap rate: 4.60%. View the OM
+at https://www.crexi.com/properties/123456/vintage-tempe.
+
+Output:
+{"Property Name": "The Vintage at Tempe Apartments", "# Units": 184, "NOI": 2415000, "Price": 52500000, "Cap Rate": 4.6, "City": "Tempe", "State": "AZ", "County": "Maricopa", "Listing URL": "https://www.crexi.com/properties/123456/vintage-tempe"}
+
+## Example 2
+Subject: For Sale - 76 Units in Long Beach
+Body: 76-unit value-add opportunity in Long Beach (LA County). In-place
+NOI of approximately $1.1M. Pricing guidance available upon execution of
+CA. Contact broker for OM.
+
+Output:
+{"Property Name": "76 Units in Long Beach", "# Units": 76, "NOI": 1100000, "Price": null, "Cap Rate": null, "City": "Long Beach", "State": "CA", "County": "Los Angeles", "Listing URL": null}
+
+## Example 3
+Subject: Q1 2026 Phoenix Multifamily Market Report
+Body: Phoenix MSA Q1 multifamily fundamentals showed continued moderation,
+with average rent growth at 2.3% YoY and vacancy ticking to 8.4%...
+
+Output:
+{"Property Name": null, "# Units": null, "NOI": null, "Price": null, "Cap Rate": null, "City": null, "State": null, "County": null, "Listing URL": null}
+
+## Example 4
+Subject: Exclusive: 312-Unit Sunbelt Portfolio | 2 Assets in Phoenix MSA
+Body: Marcus & Millichap is pleased to offer a 2-property, 312-unit
+Phoenix-area portfolio. Headline asset: Desert Vista Apartments (Mesa,
+AZ -- 184 units, $48M asking, $2.1M NOI, 4.4% cap). Sister asset: Cactus
+Run (Glendale, AZ -- 128 units). Portfolio offered together or
+individually.
+
+Output:
+{"Property Name": "Desert Vista Apartments", "# Units": 184, "NOI": 2100000, "Price": 48000000, "Cap Rate": 4.4, "City": "Mesa", "State": "AZ", "County": "Maricopa", "Listing URL": null}
+"""
+
+_anthropic_client = None
+
+
+def _get_anthropic_client():
+    global _anthropic_client
+    if _anthropic_client is not None:
+        return _anthropic_client
+    if not _ANTHROPIC_AVAILABLE or not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    _anthropic_client = anthropic.Anthropic()
+    return _anthropic_client
+
+
+def _stringify_field(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def extract_deal_fields_llm(subject, body):
+    """Returns dict matching the regex extractor's shape, or None if unavailable."""
+    client = _get_anthropic_client()
+    if client is None:
+        return None
+    try:
+        response = client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=1024,
+            system=[{
+                "type": "text",
+                "text": EXTRACTION_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            output_config={
+                "format": {"type": "json_schema", "schema": EXTRACTION_SCHEMA}
+            },
+            messages=[{
+                "role": "user",
+                "content": f"Subject: {subject}\n\nBody:\n{body[:LLM_MAX_BODY_CHARS]}",
+            }],
+        )
+        text = next((b.text for b in response.content if b.type == "text"), None)
+        if not text:
+            return None
+        data = json.loads(text)
+        return {k: _stringify_field(v) for k, v in data.items()}
+    except Exception as e:
+        print(f"⚠️  LLM extraction failed ({e}); falling back to regex.")
+        return None
+
+
+def extract_deal_fields(subject, body):
+    """Try LLM extraction first; fall back to regex if unavailable or it fails."""
+    llm_fields = extract_deal_fields_llm(subject, body)
+    if llm_fields is not None:
+        return llm_fields
+    return extract_deal_fields_regex(subject, body)
 
 
 # --------------------------------------------------------------------------
@@ -332,7 +511,6 @@ def ingest_inbox():
 
             row = {
                 **fields,
-                "County": "",  # county isn't reliably parseable from emails
                 "Broker": sender_domain(msg),
                 "Sender": sender,
                 "Subject": subject,
