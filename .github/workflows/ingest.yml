@@ -51,7 +51,10 @@ jobs:
 
       - name: Run broker ingester
         env:
-          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          # IMAP_HOST is a non-sensitive Variable (visible in logs) so we can
+          # diagnose typos. Configure under Settings → Secrets and variables →
+          # Actions → Variables tab.
+          IMAP_HOST: ${{ vars.IMAP_HOST }}
           IMAP_USER: ${{ secrets.IMAP_USER }}
           IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

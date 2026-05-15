@@ -124,10 +124,15 @@ def connect_imap():
     try:
         conn = imaplib.IMAP4_SSL(host, port)
     except socket.gaierror as e:
+        # If the value is masked in logs, these character-level stats give
+        # us enough to diagnose without leaking the (non-secret) hostname.
+        bad_chars = sorted({c for c in host if not (c.isalnum() or c in ".-")})
         raise SystemExit(
-            f"❌ DNS resolution failed for IMAP_HOST={host!r} (port {port}): {e}. "
-            f"Check the secret value — it should be a bare hostname like 'imap.gmail.com', "
-            f"with no scheme, port, whitespace, or quotes."
+            f"❌ DNS resolution failed for IMAP_HOST={host!r} (port {port}): {e}.\n"
+            f"   length={len(host)} bad_chars={bad_chars!r} "
+            f"starts_with={host[:4]!r} ends_with={host[-4:]!r}\n"
+            f"   The value should be a bare hostname like 'imap.gmail.com' — "
+            f"no scheme (https://), no port, no quotes, no leading/trailing whitespace."
         )
     conn.login(user, password)
     return conn
