@@ -25,7 +25,7 @@ Thumbs.db
 # Live-data cache (FRED rates, ZORI CSV, etc.)
 .cache/
 
-# Broker email ingester artifacts (downloaded OMs + extracted deals)
+# Broker email ingester artifacts (downloaded OMs only — state and deals
+# are committed back by the GitHub Actions workflow as an audit trail)
 inbox/
-ingested_deals.csv
 ingest.log

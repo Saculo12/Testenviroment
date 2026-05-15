@@ -1,0 +1,88 @@
+name: Broker Email Ingester
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub may delay scheduled runs under load — assume
+    # ~15-25 min in practice, not exact. Edit this to slow down if needed.
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}  # manual trigger from the Actions tab
+
+# The workflow commits state + deals back to the repo.
+permissions:
+  contents: write
+
+# Don't let a slow run overlap with the next scheduled trigger.
+concurrency:
+  group: broker-ingester
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          # Need write permission for the later push step.
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Restore the FRED + ZORI cache between runs so we don't hammer
+      # upstream APIs every 15 minutes. Cache is best-effort; if it misses,
+      # the ingester just re-downloads.
+      - name: Restore FRED + ZORI cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: ingester-cache-${{ github.run_id }}
+          restore-keys: |
+            ingester-cache-
+
+      - name: Run broker ingester
+        env:
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python broker_ingester.py
+
+      - name: Commit state + ingested deals
+        run: |
+          set -euo pipefail
+          git config user.name "deal-ingester-bot"
+          git config user.email "deal-ingester-bot@users.noreply.github.com"
+          git add state/ingest_state.json ingested_deals.csv 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          NEW_DEALS=$(git diff --cached --numstat -- ingested_deals.csv | awk '{print $1}')
+          NEW_DEALS=${NEW_DEALS:-0}
+          git commit -m "Ingest: +${NEW_DEALS} row(s) at $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Retry push briefly in case the previous run pushed first.
+          for i in 1 2 3; do
+            if git push; then break; fi
+            git pull --rebase
+            sleep 2
+          done
+
+      - name: Upload OM attachments as artifact
+        if: hashFiles('inbox/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: oms-${{ github.run_id }}
+          path: inbox/
+          retention-days: 30
+          if-no-files-found: ignore

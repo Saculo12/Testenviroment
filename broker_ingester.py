@@ -44,10 +44,11 @@ except ImportError:
 
 
 REPO_DIR = Path(__file__).parent
-STATE_PATH = REPO_DIR / ".cache" / "ingest_state.json"
+STATE_DIR = REPO_DIR / "state"
+STATE_PATH = STATE_DIR / "ingest_state.json"
 INBOX_DIR = REPO_DIR / "inbox"
 OUTPUT_CSV = REPO_DIR / "ingested_deals.csv"
-STATE_PATH.parent.mkdir(exist_ok=True)
+STATE_DIR.mkdir(exist_ok=True)
 INBOX_DIR.mkdir(exist_ok=True)
 
 # Seed list of broker / listing-platform sender domains. Extend via the
