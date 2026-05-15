@@ -97,11 +97,22 @@ def save_state(state):
 # IMAP fetch
 # --------------------------------------------------------------------------
 
+def _require_env(name):
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise SystemExit(
+            f"❌ Required env var {name!r} is missing or empty. "
+            f"In GitHub Actions, set it under Settings → Secrets and variables → Actions. "
+            f"Locally, set it in your .env file (see .env.example)."
+        )
+    return val
+
+
 def connect_imap():
-    host = os.environ["IMAP_HOST"]
+    host = _require_env("IMAP_HOST")
     port = int(os.environ.get("IMAP_PORT", 993))
-    user = os.environ["IMAP_USER"]
-    password = os.environ["IMAP_PASSWORD"]
+    user = _require_env("IMAP_USER")
+    password = _require_env("IMAP_PASSWORD")
     conn = imaplib.IMAP4_SSL(host, port)
     conn.login(user, password)
     return conn
