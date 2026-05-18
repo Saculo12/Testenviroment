@@ -27,10 +27,18 @@ ZORI_METRO_CSV_URL = os.environ.get(
 
 # Our internal market tag -> Zillow MSA RegionName (exact string in the CSV)
 MARKET_TO_ZORI_METRO = {
-    "PHOENIX": "Phoenix, AZ",
-    "TEMPE":   "Phoenix, AZ",
-    "CHICAGO": "Chicago, IL",
-    "DALLAS":  "Dallas, TX",
+    # Arizona
+    "PHOENIX":       "Phoenix, AZ",
+    "TEMPE":         "Phoenix, AZ",
+    "TUCSON":        "Tucson, AZ",
+    # Southern California
+    "LOS_ANGELES":   "Los Angeles-Long Beach-Anaheim, CA",
+    "ORANGE_COUNTY": "Los Angeles-Long Beach-Anaheim, CA",
+    "SAN_DIEGO":     "San Diego-Chula Vista-Carlsbad, CA",
+    "INLAND_EMPIRE": "Riverside-San Bernardino-Ontario, CA",
+    # Other existing markets
+    "CHICAGO":       "Chicago, IL",
+    "DALLAS":        "Dallas, TX",
 }
 
 
@@ -122,11 +130,19 @@ def get_zori_rent_growth(market_tag):
 
 
 MARKET_LIBRARY = {
-    "PHOENIX": {"vacancy": 0.12, "rent_growth": 0.05},
-    "CHICAGO": {"vacancy": 0.08, "rent_growth": 0.02},
-    "DALLAS":  {"vacancy": 0.10, "rent_growth": 0.04},
-    "TEMPE":   {"vacancy": 0.12, "rent_growth": 0.05},
-    "DEFAULT": {"vacancy": 0.15, "rent_growth": 0.01}
+    # Arizona
+    "PHOENIX":       {"vacancy": 0.12, "rent_growth": 0.05},
+    "TEMPE":         {"vacancy": 0.12, "rent_growth": 0.05},
+    "TUCSON":        {"vacancy": 0.10, "rent_growth": 0.03},
+    # Southern California
+    "LOS_ANGELES":   {"vacancy": 0.05, "rent_growth": 0.04},
+    "ORANGE_COUNTY": {"vacancy": 0.04, "rent_growth": 0.04},
+    "SAN_DIEGO":     {"vacancy": 0.04, "rent_growth": 0.05},
+    "INLAND_EMPIRE": {"vacancy": 0.07, "rent_growth": 0.04},
+    # Other markets
+    "CHICAGO":       {"vacancy": 0.08, "rent_growth": 0.02},
+    "DALLAS":        {"vacancy": 0.10, "rent_growth": 0.04},
+    "DEFAULT":       {"vacancy": 0.15, "rent_growth": 0.01},
 }
 
 

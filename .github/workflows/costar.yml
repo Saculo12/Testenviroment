@@ -1,0 +1,82 @@
+name: CoStar Export Scorer
+
+on:
+  # Triggers automatically whenever a new CSV lands in costar_exports/.
+  push:
+    paths:
+      - "costar_exports/*.csv"
+
+  # Manual trigger: optionally specify which file to score.
+  workflow_dispatch:
+    inputs:
+      export_file:
+        description: "Filename inside costar_exports/ to score (leave blank = newest)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+# Never run two scoring jobs at the same time (avoids scored_deals.csv conflicts).
+concurrency:
+  group: costar-scorer
+  cancel-in-progress: false
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Reuse the same FRED/ZORI cache as the broker ingester workflow.
+      - name: Restore FRED + ZORI cache
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: ingester-cache-${{ github.run_id }}
+          restore-keys: |
+            ingester-cache-
+
+      - name: Run CoStar scorer
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -n "${{ inputs.export_file }}" ]; then
+            python costar_ingester.py "costar_exports/${{ inputs.export_file }}"
+          else
+            python costar_ingester.py
+          fi
+
+      - name: Commit scored results
+        run: |
+          set -euo pipefail
+          git config user.name "costar-scorer-bot"
+          git config user.email "costar-scorer-bot@users.noreply.github.com"
+          git add scored_deals.csv 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          SCORED=$(git diff --cached --numstat -- scored_deals.csv | awk '{print $1}')
+          SCORED=${SCORED:-0}
+          git commit -m "Score: +${SCORED} row(s) from CoStar at $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do
+            if git push; then break; fi
+            git pull --rebase
+            sleep 2
+          done

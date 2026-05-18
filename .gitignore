@@ -29,3 +29,8 @@ Thumbs.db
 # are committed back by the GitHub Actions workflow as an audit trail)
 inbox/
 ingest.log
+
+# CoStar exports: the folder is tracked (see costar_exports/.gitkeep) but
+# raw export CSVs are ignored by default to avoid committing proprietary data.
+# Remove the line below if you want the workflow to auto-trigger on push.
+costar_exports/*.csv
