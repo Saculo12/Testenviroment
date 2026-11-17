@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redirect & Popup Guard
 // @description  Blocks popups, popunders, ad overlays and off-site redirects on bingeflix, including inside its embedded video players
-// @version      2.0
+// @version      2.1
 // @match        *://*/*
 // @run-at       document-start
 // @inject-into  page
@@ -22,7 +22,7 @@
   // redirect the whole tab. This is the strongest protection. If the player
   // shows "sandbox detected" / "please disable sandbox" or won't play,
   // set this to false (the other layers still run inside the player).
-  const SANDBOX_PLAYERS = true;
+  const SANDBOX_PLAYERS = false;
 
   // Remove invisible full-screen layers that eat your first tap.
   const REMOVE_OVERLAYS = true;
