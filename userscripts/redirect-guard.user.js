@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redirect & Popup Guard
-// @description  Blocks popups, popunders, ad overlays and off-site redirects on bingeflix, including inside its embedded video players
-// @version      2.1
+// @description  Blocks popups, popunders, ad overlays and off-site redirects on bingeflix (incl. its video players), and hides "Open in app" banners on all sites
+// @version      2.2
 // @match        *://*/*
 // @run-at       document-start
 // @inject-into  page
@@ -10,7 +10,8 @@
 // Why @match *://*/* : most of the remaining redirects come from the video
 // player, which is an <iframe> on a different domain. The script has to run
 // inside that iframe too. It exits immediately on any page that is not
-// bingeflix or embedded in bingeflix, so it does nothing on other sites.
+// bingeflix or embedded in bingeflix (only the "Open in app" banner blocker
+// runs on other sites).
 
 (function () {
   'use strict';
@@ -34,9 +35,86 @@
   // Ad / popunder networks whose scripts and frames are refused outright.
   const AD_HOSTS = /popads|popcash|popunder|propeller|adsterra|hilltop|monetag|exoclick|exosrv|juicyads|clickadu|admaven|ad-maven|adcash|onclicka|richads|galaksion|trafficstars|tsyndicate|rollerads|a-ads|acint\.net|cpm|syndication|doubleclick|adnxs|outbrain|taboola|mgid|revcontent|bidgear|realsrv|magsrv|pushame|zeroredirect|redirect|aclib|histats|dtscout|crwdcntrl/i;
 
-  // ---- Only run on the site or inside frames embedded by it ---------------
+  // Hide "Open in app" / "Get the app" banners on EVERY website (not just
+  // bingeflix). Set to false to turn this off.
+  const BLOCK_APP_BANNERS = true;
+
   let inFrame;
   try { inFrame = window.top !== window.self; } catch (_) { inFrame = true; }
+
+  // ---- "Open in app" banners (all sites) ------------------------------------
+  if (BLOCK_APP_BANNERS && !inFrame && !window.__appBannerGuard) {
+    Object.defineProperty(window, '__appBannerGuard', { value: true });
+
+    // a) Safari's built-in Smart App Banner comes from this <meta> tag.
+    const APP_META = 'meta[name="apple-itunes-app" i],meta[name="google-play-app" i],meta[name="apple-itunes-app-id" i]';
+
+    // b) Home-made banners that sites build themselves.
+    const BANNER_CSS =
+      '#smartbanner,.smartbanner,.smart-banner,[class*="smart-app-banner" i],' +
+      '[class*="app-banner" i],[id*="app-banner" i],[class*="appbanner" i],' +
+      '[class*="open-in-app" i],[id*="open-in-app" i],[class*="openinapp" i],' +
+      '[class*="xpromo" i],[class*="get-the-app" i],[class*="download-app" i],' +
+      '[class*="app-promo" i],[class*="apppromo" i]' +
+      '{display:none !important}';
+
+    const addStyle = () => {
+      const root = document.head || document.documentElement;
+      if (!root) return false;
+      const s = document.createElement('style');
+      s.textContent = BANNER_CSS;
+      root.appendChild(s);
+      return true;
+    };
+
+    // c) Anything else: a short "Open app" / "Continue in app" button inside a
+    //    fixed or sticky bar or bottom sheet gets that bar hidden.
+    const APP_TEXT = /\b(open|continue|view|use|switch to|read|watch|listen)\b.{0,15}\bapp\b|\bget the app\b|\bdownload (the|our) app\b|\bopen in\b.{0,15}\bapp\b/i;
+    const seen = new WeakSet();
+
+    function hideBanner(btn) {
+      let el = btn;
+      for (let i = 0; i < 10 && el && el !== document.body && el !== document.documentElement; i++, el = el.parentElement) {
+        const pos = getComputedStyle(el).position;
+        if (pos !== 'fixed' && pos !== 'sticky') continue;
+        // Don't hide a whole site header/menu that just happens to contain
+        // an "app" button: only small, mostly-empty bars.
+        const target = el.textContent.trim().length < 300 ? el : btn;
+        target.style.setProperty('display', 'none', 'important');
+        // Bottom sheets often lock page scrolling; unlock it.
+        for (const r of [document.body, document.documentElement]) {
+          if (r && getComputedStyle(r).overflow === 'hidden') r.style.setProperty('overflow', 'auto', 'important');
+        }
+        console.log('[Guard] hid app banner:', btn.textContent.trim());
+        return;
+      }
+    }
+
+    function scanBanners() {
+      for (const m of document.querySelectorAll(APP_META)) m.remove();
+      if (!document.body) return;
+      for (const b of document.querySelectorAll('a,button,[role="button"]')) {
+        if (seen.has(b)) continue;
+        seen.add(b);
+        const t = (b.textContent || '').trim();
+        if (t && t.length <= 40 && APP_TEXT.test(t)) hideBanner(b);
+      }
+    }
+
+    let styled = addStyle();
+    let pending = false;
+    new MutationObserver((muts) => {
+      if (!styled) styled = addStyle();
+      for (const m of muts) for (const n of m.addedNodes) {
+        if (n.nodeType === 1 && n.matches(APP_META)) n.remove(); // before Safari reads it
+      }
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; scanBanners(); }, 300);
+    }).observe(document, { childList: true, subtree: true });
+  }
+
+  // ---- Popup / redirect guard: only on the site or frames embedded by it ---
   const ancestors = location.ancestorOrigins ? Array.from(location.ancestorOrigins) : [];
   const onSite = SITE.test(location.hostname);
   const underSite = inFrame && (ancestors.some((o) => SITE.test(o)) || SITE.test(document.referrer));
