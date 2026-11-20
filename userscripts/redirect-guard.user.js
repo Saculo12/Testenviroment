@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Redirect & Popup Guard
 // @description  Blocks popups, popunders, ad overlays and off-site redirects on bingeflix (incl. its video players), and hides "Open in app" banners on all sites
-// @version      2.2
+// @version      2.3
 // @match        *://*/*
 // @run-at       document-start
 // @inject-into  page
@@ -100,6 +100,13 @@
         if (t && t.length <= 40 && APP_TEXT.test(t)) hideBanner(b);
       }
     }
+
+    // Remove the tag right away if the page already has it, and again once
+    // the page has loaded (in case Safari checks for it then).
+    const killMeta = () => { for (const m of document.querySelectorAll(APP_META)) m.remove(); };
+    killMeta();
+    document.addEventListener('DOMContentLoaded', killMeta, true);
+    window.addEventListener('load', killMeta, true);
 
     let styled = addStyle();
     let pending = false;
